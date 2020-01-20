@@ -16,6 +16,7 @@ from homography_warping import *
 
 FLAGS = tf.app.flags.FLAGS
 
+
 def get_propability_map(cv, depth_map, depth_start, depth_interval):
     """ get probability map from cost volume """
 
@@ -23,7 +24,7 @@ def get_propability_map(cv, depth_map, depth_start, depth_interval):
         """ repeat each element num_repeats times """
         x = tf.reshape(x, [-1])
         ones = tf.ones((1, num_repeats), dtype='int32')
-        x = tf.reshape(x, shape=(-1,1))
+        x = tf.reshape(x, shape=(-1, 1))
         x = tf.matmul(x, ones)
         return tf.reshape(x, [-1])
 
@@ -69,6 +70,7 @@ def get_propability_map(cv, depth_map, depth_start, depth_interval):
 
     return prob_map
 
+
 def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gpu=True):
     """ infer depth image from multi-view images and cameras """
 
@@ -108,7 +110,7 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
             for view in range(0, FLAGS.view_num - 1):
                 homography = tf.slice(view_homographies[view], begin=[0, d, 0, 0], size=[-1, 1, 3, 3])
                 homography = tf.squeeze(homography, axis=1)
-				# warped_view_feature = homography_warping(view_towers[view].get_output(), homography)
+                # warped_view_feature = homography_warping(view_towers[view].get_output(), homography)
                 warped_view_feature = tf_transform_homography(view_towers[view].get_output(), homography)
                 ave_feature = ave_feature + warped_view_feature
                 ave_feature2 = ave_feature2 + tf.square(warped_view_feature)
@@ -144,7 +146,8 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
     # probability map
     prob_map = get_propability_map(probability_volume, estimated_depth_map, depth_start, depth_interval)
 
-    return estimated_depth_map, prob_map#, filtered_depth_map, probability_volume
+    return estimated_depth_map, prob_map  # , filtered_depth_map, probability_volume
+
 
 def inference_mem(images, cams, depth_num, depth_start, depth_interval, is_master_gpu=True):
     """ infer depth image from multi-view images and cameras """
@@ -282,7 +285,7 @@ def inference_prob_recurrent(images, cams, depth_num, depth_start, depth_interva
     gru1_filters = 16
     gru2_filters = 4
     gru3_filters = 2
-    feature_shape = [FLAGS.batch_size, FLAGS.max_h/4, FLAGS.max_w/4, 32]
+    feature_shape = [FLAGS.batch_size, FLAGS.max_h / 4, FLAGS.max_w / 4, 32]
     gru_input_shape = [feature_shape[1], feature_shape[2]]
     state1 = tf.zeros([FLAGS.batch_size, feature_shape[1], feature_shape[2], gru1_filters])
     state2 = tf.zeros([FLAGS.batch_size, feature_shape[1], feature_shape[2], gru2_filters])
@@ -313,9 +316,9 @@ def inference_prob_recurrent(images, cams, depth_num, depth_start, depth_interva
                 ave_feature = ave_feature + warped_view_feature
                 ave_feature2 = ave_feature2 + tf.square(warped_view_feature)
             ave_feature = ave_feature / FLAGS.view_num
-            ave_feature2 = ave_feature2 / FLAGS.view_num 
-            cost = ave_feature2 - tf.square(ave_feature) 
-            
+            ave_feature2 = ave_feature2 / FLAGS.view_num
+            cost = ave_feature2 - tf.square(ave_feature)
+
             # gru
             reg_cost1, state1 = conv_gru1(-cost, state1, scope='conv_gru1')
             reg_cost2, state2 = conv_gru2(reg_cost1, state2, scope='conv_gru2')
@@ -323,13 +326,14 @@ def inference_prob_recurrent(images, cams, depth_num, depth_start, depth_interva
             reg_cost = tf.layers.conv2d(
                 reg_cost3, 1, 3, padding='same', reuse=tf.AUTO_REUSE, name='prob_conv')
             depth_costs.append(reg_cost)
-            
+
         prob_volume = tf.stack(depth_costs, axis=1)
         prob_volume = tf.nn.softmax(prob_volume, axis=1, name='prob_volume')
 
     return prob_volume
 
-def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end, 
+
+def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
                               is_master_gpu=True, reg_type='GRU', inverse_depth=False):
     """ infer disparity image from stereo images and cameras """
 
@@ -357,7 +361,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
         view_cam = tf.squeeze(tf.slice(cams, [0, view, 0, 0, 0], [-1, 1, 2, 4, 4]), axis=1)
         if inverse_depth:
             homographies = get_homographies_inv_depth(ref_cam, view_cam, depth_num=depth_num,
-                                depth_start=depth_start, depth_end=depth_end)
+                                                      depth_start=depth_start, depth_end=depth_end)
         else:
             homographies = get_homographies(ref_cam, view_cam, depth_num=depth_num,
                                             depth_start=depth_start, depth_interval=depth_interval)
@@ -367,7 +371,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
     gru1_filters = 16
     gru2_filters = 4
     gru3_filters = 2
-    feature_shape = [FLAGS.batch_size, FLAGS.max_h/4, FLAGS.max_w/4, 32]
+    feature_shape = [FLAGS.batch_size, FLAGS.max_h / 4, FLAGS.max_w / 4, 32]
     gru_input_shape = [feature_shape[1], feature_shape[2]]
     state1 = tf.zeros([FLAGS.batch_size, feature_shape[1], feature_shape[2], gru1_filters])
     state2 = tf.zeros([FLAGS.batch_size, feature_shape[1], feature_shape[2], gru2_filters])
@@ -417,7 +421,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
         prob = tf.exp(reg_cost)
 
         # index
-        d_idx = tf.cast(depth_index, tf.float32) 
+        d_idx = tf.cast(depth_index, tf.float32)
         if inverse_depth:
             inv_depth_start = tf.div(1.0, depth_start)
             inv_depth_end = tf.div(1.0, depth_end)
@@ -442,7 +446,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
         depth_index = tf.add(depth_index, incre)
 
         return depth_index, state1, state2, state3, depth_image, max_prob_image, exp_sum, incre
-    
+
     # run forward loop
     exp_sum = tf.assign(exp_sum, init_map)
     depth_image = tf.assign(depth_image, init_map)
@@ -460,7 +464,9 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
     forward_depth_map = depth_image
     return forward_depth_map, max_prob_image / forward_exp_sum
 
-def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, is_master_gpu=True):
+
+def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, colmap_image, depth_start_colmap,
+                 depth_end_colmap, prob_image, is_master_gpu=True):
     """ refine depth image with the image """
 
     # normalization parameters
@@ -472,19 +478,36 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, 
         depth_end, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
     depth_scale_mat = depth_end_mat - depth_start_mat
 
+
+    # resize normalized image to the same size of depth image
+    resized_colmap_image = tf.image.resize_bilinear(colmap_image, [depth_shape[1], depth_shape[2]])
+
+    # normalization parameters COLMAP
+    depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
+    depth_start_mat_colmap = tf.tile(tf.reshape(
+        depth_start_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+    depth_end_mat_colmap = tf.tile(tf.reshape(
+        depth_end_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+    depth_scale_mat_colmap = depth_end_mat_colmap - depth_start_mat_colmap
+
     # normalize depth map (to 0~1)
     init_norm_depth_map = tf.div(init_depth_map - depth_start_mat, depth_scale_mat)
 
     # resize normalized image to the same size of depth image
     resized_image = tf.image.resize_bilinear(image, [depth_shape[1], depth_shape[2]])
 
+    # normalize depth map (to 0~1)
+    norm_colmap_image = tf.div(resized_colmap_image - depth_start_mat_colmap, depth_scale_mat_colmap)
+
+
     # refinement network
     if is_master_gpu:
-        norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map},
-                                        is_training=True, reuse=False)
+        norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map,
+                                      'colmap_image': norm_colmap_image, 'prob_image': prob_image},
+                                     is_training=True, reuse=False)
     else:
         norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map},
-                                        is_training=True, reuse=True)
+                                     is_training=True, reuse=True)
     norm_depth_map = norm_depth_tower.get_output()
 
     # denormalize depth map

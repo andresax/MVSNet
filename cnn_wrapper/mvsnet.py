@@ -27,6 +27,7 @@ class UniNetDS2(Network):
         .conv_bn(3, base_filter * 4, 1, center=True, scale=True, name='conv2_1')
         .conv(3, base_filter * 4, 1, biased=False, relu=False, name='conv2_2'))
 
+
 class UniNetDS2GN(Network):
     """Simple UniNet with group normalization."""
 
@@ -42,6 +43,7 @@ class UniNetDS2GN(Network):
         .conv_gn(5, base_filter * 4, 2, center=True, scale=True, name='conv2_0')
         .conv_gn(3, base_filter * 4, 1, center=True, scale=True, name='conv2_1')
         .conv(3, base_filter * 4, 1, biased=False, relu=False, name='conv2_2'))
+
 
 class UNetDS2GN(Network):
     """2D U-Net with group normalization."""
@@ -109,6 +111,7 @@ class UNetDS2GN(Network):
 ###################### 3D CNNs cost volume regularization network ######################
 ########################################################################################
 
+
 class RegNetUS0(Network):
     """network for regularizing 3D cost volume in a encoder-decoder style. Keeping original size."""
 
@@ -145,12 +148,13 @@ class RegNetUS0(Network):
         .add(name='3dconv6_1')
         .conv(3, 1, 1, biased=False, relu=False, name='3dconv6_2'))
 
+
 class RefineNet(Network):
     """network for depth map refinement using original image."""
 
     def setup(self):
 
-        (self.feed('color_image', 'depth_image')
+        (self.feed('color_image', 'depth_image', 'colmap_image', 'prob_image')
         .concat(axis=3, name='concat_image'))
 
         (self.feed('concat_image')
