@@ -47,7 +47,9 @@ def get_propability_map(cv, depth_map, depth_start, depth_interval):
     d_coordinates = tf.reshape((depth_map - depth_start) / depth_interval, [-1])
     d_coordinates_left0 = tf.clip_by_value(tf.cast(tf.floor(d_coordinates), 'int32'), 0, depth - 1)
     d_coordinates_left1 = tf.clip_by_value(d_coordinates_left0 - 1, 0, depth - 1)
-    d_coordinates1_right0 = tf.clip_by_value(tf.cast(tf.ceil(d_coordinates), 'int32'), 0, depth - 1)
+
+#    import ipdb; ipdb.set_trace()
+    d_coordinates1_right0 = tf.clip_by_value(tf.cast(tf.ceil(d_coordinates), 'int32'), 0, depth - 1)    
     d_coordinates1_right1 = tf.clip_by_value(d_coordinates1_right0 + 1, 0, depth - 1)
 
     # voxel coordinates
@@ -119,7 +121,7 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
             cost = ave_feature2 - tf.square(ave_feature)
             depth_costs.append(cost)
         cost_volume = tf.stack(depth_costs, axis=1)
-
+    # import ipdb; ipdb.set_trace()
     # filtered cost volume, size of (B, D, H, W, 1)
     if is_master_gpu:
         filtered_cost_volume_tower = RegNetUS0({'data': cost_volume}, is_training=True, reuse=False)
@@ -465,8 +467,8 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
     return forward_depth_map, max_prob_image / forward_exp_sum
 
 
-def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, colmap_image, depth_start_colmap,
-                 depth_end_colmap, prob_image, is_master_gpu=True):
+def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval,# colmap_image, depth_start_colmap, #prob_image,
+ is_master_gpu=True):
     """ refine depth image with the image """
 
     # normalization parameters
@@ -480,15 +482,18 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, 
 
 
     # resize normalized image to the same size of depth image
-    resized_colmap_image = tf.image.resize_bilinear(colmap_image, [depth_shape[1], depth_shape[2]])
+    # resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_image, [depth_shape[1], depth_shape[2]])
+    # resized_prob_image = tf.image.resize_nearest_neighbor(prob_image, [depth_shape[1], depth_shape[2]])
 
-    # normalization parameters COLMAP
-    depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
-    depth_start_mat_colmap = tf.tile(tf.reshape(
-        depth_start_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
-    depth_end_mat_colmap = tf.tile(tf.reshape(
-        depth_end_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
-    depth_scale_mat_colmap = depth_end_mat_colmap - depth_start_mat_colmap
+    # # normalization parameters COLMAP
+    # depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
+    # depth_start_mat_colmap = tf.tile(tf.reshape(
+    #     depth_start_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+    # depth_end_mat_colmap = tf.tile(tf.reshape(
+    #     depth_end_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+    # depth_scale_mat_colmap = depth_end_mat_colmap - depth_start_mat_colmap
+    # # normalize depth map (to 0~1)
+    # norm_colmap_image = tf.div(resized_colmap_image - depth_start_mat_colmap, depth_scale_mat_colmap)
 
     # normalize depth map (to 0~1)
     init_norm_depth_map = tf.div(init_depth_map - depth_start_mat, depth_scale_mat)
@@ -496,14 +501,13 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, 
     # resize normalized image to the same size of depth image
     resized_image = tf.image.resize_bilinear(image, [depth_shape[1], depth_shape[2]])
 
-    # normalize depth map (to 0~1)
-    norm_colmap_image = tf.div(resized_colmap_image - depth_start_mat_colmap, depth_scale_mat_colmap)
 
 
     # refinement network
     if is_master_gpu:
         norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map,
-                                      'colmap_image': norm_colmap_image, 'prob_image': prob_image},
+                                      # 'colmap_image': norm_colmap_image, 'prob_image': resized_prob_image
+                                      },
                                      is_training=True, reuse=False)
     else:
         norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map},

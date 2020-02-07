@@ -114,6 +114,8 @@ def load_bin(file_path, w, h):
     no_of_floats = w * h
     f.seek(position, 0)
     bin_image = np.fromfile(f, dtype=np.dtype('f'), count=no_of_floats)
+    shape = (w, h, 1)
+    bin_image = np.reshape(bin_image, shape)
     return bin_image
 
 
@@ -257,7 +259,7 @@ def gen_dtu_resized_path(dtu_data_folder, mode='training'):
                     45, 46, 47, 50, 51, 52, 53, 55, 57, 58, 60, 61, 63, 64, 65, 68, 69, 70, 71, 72,
                     74, 76, 83, 84, 85, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100,
                     101, 102, 103, 104, 105, 107, 108, 109, 111, 112, 113, 115, 116, 119, 120,
-                    121, 122, 123, 124, 125, 126, 127, 128]
+                    121, 122, 123, 124, 125, 126, 127,128]
     validation_set = [3, 5, 17, 21, 28, 35, 37, 38, 40, 43, 56, 59, 66, 67, 82, 86, 106, 117]
 
     data_set = []
@@ -273,8 +275,8 @@ def gen_dtu_resized_path(dtu_data_folder, mode='training'):
         cam_folder = os.path.join(dtu_data_folder, 'Cameras/train')
         depth_folder = os.path.join(dtu_data_folder, ('Depths/scan%d_train' % i))
 
-        colmap_folder = os.path.join(dtu_data_folder, ('colmap/scan%d_3_/stereo/depth_maps' % i))
-        prob_folder = os.path.join(dtu_data_folder, ('colmap/scan%d_3_/stereo/sel_map' % i))
+        # colmap_folder = os.path.join(dtu_data_folder, ('colmap/scan%d_3_/stereo/depth_maps' % i))
+        # prob_folder = os.path.join(dtu_data_folder, ('colmap/scan%d_3_/stereo/sel_map' % i))
 
         if mode == 'training':
             # for each lighting
@@ -287,28 +289,28 @@ def gen_dtu_resized_path(dtu_data_folder, mode='training'):
                     ref_image_path = os.path.join(
                         image_folder, ('rect_%03d_%d_r5000.png' % ((ref_index + 1), j)))
                     ref_cam_path = os.path.join(cam_folder, ('%08d_cam.txt' % ref_index))
-                    ref_colmap_path = os.path.join(
-                        colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
-                    ref_prob_path = os.path.join(
-                        prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
+                    # ref_colmap_path = os.path.join(
+                    #     colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
+                    # ref_prob_path = os.path.join(
+                    #     prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
                     paths.append(ref_image_path)
                     paths.append(ref_cam_path)
-                    paths.append(ref_colmap_path)
-                    paths.append(ref_prob_path)
+                    # paths.append(ref_colmap_path)
+                    # paths.append(ref_prob_path)
                     # view images
                     for view in range(FLAGS.view_num - 1):
                         view_index = int(cluster_list[22 * p + 2 * view + 3])
                         view_image_path = os.path.join(
                             image_folder, ('rect_%03d_%d_r5000.png' % ((view_index + 1), j)))
                         view_cam_path = os.path.join(cam_folder, ('%08d_cam.txt' % view_index))
-                        view_colmap_path = os.path.join(
-                            colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
-                        view_prob_path = os.path.join(
-                            prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
+                        # view_colmap_path = os.path.join(
+                        #     colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
+                        # view_prob_path = os.path.join(
+                        #     prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
                         paths.append(view_image_path)
                         paths.append(view_cam_path)
-                        paths.append(view_colmap_path)
-                        paths.append(view_prob_path)
+                        # paths.append(view_colmap_path)
+                        # paths.append(view_prob_path)
                     # depth path
                     depth_image_path = os.path.join(depth_folder, ('depth_map_%04d.pfm' % ref_index))
                     paths.append(depth_image_path)
@@ -323,28 +325,28 @@ def gen_dtu_resized_path(dtu_data_folder, mode='training'):
                 ref_image_path = os.path.join(
                     image_folder, ('rect_%03d_%d_r5000.png' % ((ref_index + 1), j)))
                 ref_cam_path = os.path.join(cam_folder, ('%08d_cam.txt' % ref_index))
-                ref_colmap_path = os.path.join(
-                    colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
-                ref_prob_path = os.path.join(
-                        prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
+                # ref_colmap_path = os.path.join(
+                #     colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
+                # ref_prob_path = os.path.join(
+                #         prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((ref_index + 1), 3)))
                 paths.append(ref_image_path)
                 paths.append(ref_cam_path)
-                paths.append(ref_colmap_path)
-                paths.append(ref_prob_path)
+                # paths.append(ref_colmap_path)
+                # paths.append(ref_prob_path)
                 # view images
                 for view in range(FLAGS.view_num - 1):
                     view_index = int(cluster_list[22 * p + 2 * view + 3])
                     view_image_path = os.path.join(
                         image_folder, ('rect_%03d_%d_r5000.png' % ((view_index + 1), j)))
                     view_cam_path = os.path.join(cam_folder, ('%08d_cam.txt' % view_index))
-                    view_colmap_path = os.path.join(
-                        colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
-                    view_prob_path = os.path.join(
-                        prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
+                    # view_colmap_path = os.path.join(
+                    #     colmap_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
+                    # view_prob_path = os.path.join(
+                    #     prob_folder, ('rect_%03d_%d_r5000.png.geometric.bin' % ((view_index + 1), 3)))
                     paths.append(view_image_path)
                     paths.append(view_cam_path)
-                    paths.append(view_colmap_path)
-                    paths.append(view_prob_path)
+                    # paths.append(view_colmap_path)
+                    # paths.append(view_prob_path)
                 # depth path
                 depth_image_path = os.path.join(depth_folder, ('depth_map_%04d.pfm' % ref_index))
                 paths.append(depth_image_path)

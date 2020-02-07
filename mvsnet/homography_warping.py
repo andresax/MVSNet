@@ -22,7 +22,7 @@ def get_homographies(left_cam, right_cam, depth_num, depth_start, depth_interval
         depth = depth_start + tf.cast(tf.range(depth_num), tf.float32) * depth_interval
         # preparation
         num_depth = tf.shape(depth)[0]
-        K_left_inv = tf.matrix_inverse(tf.squeeze(K_left, axis=1))
+        K_left_inv = tf.linalg.inv(tf.squeeze(K_left, axis=1))
         R_left_trans = tf.transpose(tf.squeeze(R_left, axis=1), perm=[0, 2, 1])
         R_right_trans = tf.transpose(tf.squeeze(R_right, axis=1), perm=[0, 2, 1])
 
