@@ -467,7 +467,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
     return forward_depth_map, max_prob_image / forward_exp_sum
 
 
-def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval,# colmap_image, depth_start_colmap, #prob_image,
+def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, colmap_image=None, depth_start_colmap=None, #prob_image,
  is_master_gpu=True):
     """ refine depth image with the image """
 
@@ -480,35 +480,39 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval,#
         depth_end, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
     depth_scale_mat = depth_end_mat - depth_start_mat
 
-
-    # resize normalized image to the same size of depth image
-    # resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_image, [depth_shape[1], depth_shape[2]])
-    # resized_prob_image = tf.image.resize_nearest_neighbor(prob_image, [depth_shape[1], depth_shape[2]])
-
-    # # normalization parameters COLMAP
-    # depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
-    # depth_start_mat_colmap = tf.tile(tf.reshape(
-    #     depth_start_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
-    # depth_end_mat_colmap = tf.tile(tf.reshape(
-    #     depth_end_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
-    # depth_scale_mat_colmap = depth_end_mat_colmap - depth_start_mat_colmap
-    # # normalize depth map (to 0~1)
-    # norm_colmap_image = tf.div(resized_colmap_image - depth_start_mat_colmap, depth_scale_mat_colmap)
-
     # normalize depth map (to 0~1)
     init_norm_depth_map = tf.div(init_depth_map - depth_start_mat, depth_scale_mat)
 
     # resize normalized image to the same size of depth image
     resized_image = tf.image.resize_bilinear(image, [depth_shape[1], depth_shape[2]])
 
+    if colmap_image:
+        # resize normalized image to the same size of depth image
+        resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_image, [depth_shape[1], depth_shape[2]])
+        # resized_prob_image = tf.image.resize_nearest_neighbor(prob_image, [depth_shape[1], depth_shape[2]])
+
+        # normalization parameters COLMAP
+        depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
+        depth_start_mat_colmap = tf.tile(tf.reshape(
+            depth_start_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+        depth_end_mat_colmap = tf.tile(tf.reshape(
+            depth_end_colmap, [depth_shape[0], 1, 1, 1]), [1, depth_shape[1], depth_shape[2], 1])
+        depth_scale_mat_colmap = depth_end_mat_colmap - depth_start_mat_colmap
+        # normalize depth map (to 0~1)
+        norm_colmap_image = tf.div(resized_colmap_image - depth_start_mat_colmap, depth_scale_mat_colmap)
 
 
     # refinement network
     if is_master_gpu:
-        norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map,
-                                      # 'colmap_image': norm_colmap_image, 'prob_image': resized_prob_image
-                                      },
-                                     is_training=True, reuse=False)
+
+        if colmap_image:
+            norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map,
+                                          'colmap_image': norm_colmap_image,# 'prob_image': resized_prob_image
+                                          },
+                                         is_training=True, reuse=False)
+        else:
+            norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map},
+                                         is_training=True, reuse=False)
     else:
         norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map},
                                      is_training=True, reuse=True)

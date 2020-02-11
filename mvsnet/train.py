@@ -38,17 +38,19 @@ tf.app.flags.DEFINE_boolean('train_dtu', True,
                             """Whether to train.""")
 tf.app.flags.DEFINE_boolean('use_pretrain', False, 
                             """Whether to train.""")
+tf.app.flags.DEFINE_boolean('use_colmap', True, 
+                            """Whether to train.""")
 tf.app.flags.DEFINE_integer('ckpt_step', 5,
                             """ckpt step.""")
 
 # input parameters
 tf.app.flags.DEFINE_integer('view_num', 3, 
                             """Number of images (1 ref image and view_num - 1 view images).""")
-tf.app.flags.DEFINE_integer('max_d', 192, 
+tf.app.flags.DEFINE_integer('max_d', 192, #192, 
                             """Maximum depth step when training.""")
-tf.app.flags.DEFINE_integer('max_w', 640, 
+tf.app.flags.DEFINE_integer('max_w', 640,#640, 
                             """Maximum image width when training.""")
-tf.app.flags.DEFINE_integer('max_h', 512, 
+tf.app.flags.DEFINE_integer('max_h', 512,#512, 
                             """Maximum image height when training.""")
 tf.app.flags.DEFINE_float('sample_scale', 0.25, 
                             """Downsample scale for building cost volume.""")
@@ -56,9 +58,9 @@ tf.app.flags.DEFINE_float('interval_scale', 1.06,
                             """Downsample scale for building cost volume.""")
 
 # network architectures
-tf.app.flags.DEFINE_string('regularization', 'GRU',
+tf.app.flags.DEFINE_string('regularization', '3DCNNs',
                            """Regularization method.""")
-tf.app.flags.DEFINE_boolean('refinement', True,
+tf.app.flags.DEFINE_boolean('refinement', False,
                            """Whether to apply depth map refinement for 3DCNNs""")
 
 # training parameters
@@ -66,7 +68,7 @@ tf.app.flags.DEFINE_integer('num_gpus', 1,
                             """Number of GPUs.""")
 tf.app.flags.DEFINE_integer('batch_size', 1, 
                             """Training batch size.""")
-tf.app.flags.DEFINE_integer('epoch', 10000, 
+tf.app.flags.DEFINE_integer('epoch', 6, 
                             """Training epoch number.""")
 tf.app.flags.DEFINE_float('val_ratio', 0, 
                           """Ratio of validation set when splitting dataset.""")
@@ -83,6 +85,15 @@ tf.app.flags.DEFINE_float('gamma', 0.9,
 
 
 FLAGS = tf.app.flags.FLAGS
+
+log_dir2 = log_dir2 + '/col_' + str(FLAGS.use_colmap) +  \
+    '_views_' + str(FLAGS.view_num) + '_' + str(FLAGS.max_d) + \
+    '_' + str(FLAGS.max_w) + '_' + str(FLAGS.max_h) + \
+    '_sc_' + str(FLAGS.sample_scale) + '_' + str(FLAGS.interval_scale) + \
+    '_' + str(FLAGS.base_lr) + '_' + str(FLAGS.gamma) + '_' + str(FLAGS.regularization) + \
+    '_ref_' + str(FLAGS.refinement) + '/'
+
+
 
 class MVSGenerator: 
     """ data generator class, tf only accept generator without param """
@@ -101,19 +112,15 @@ class MVSGenerator:
                 images = []
                 cams = []
                 for view in range(self.view_num):
-                    image = center_image(cv2.imread(data[2 * view]))#2 to 4 after colmap added
-                    cam = load_cam(open(data[2 * view + 1]))
+                    image = center_image(cv2.imread(data[4 * view]))#2 to 4 after colmap added
+                    cam = load_cam(open(data[4 * view + 1]))
                     cam[1][3][1] = cam[1][3][1] * FLAGS.interval_scale
                     images.append(image)
                     cams.append(cam)
-                    print( view)
-                print(data[2 * self.view_num])
-                with open(data[2 * self.view_num], 'rb') as f:
+                with open(data[4 * self.view_num], 'rb') as f:
                     depth_image = load_pfm(f)
 
-                #colmap_image = load_bin(data[4 * view + 2],1600,1200)
-                
-                #import ipdb;ipdb.set_trace()
+                colmap_image = load_bin(data[4 * view + 2],1600,1200)
 
                 # colmap_image = np.zeros([1600,1200,1], np.float32) 
 
@@ -129,14 +136,10 @@ class MVSGenerator:
                 duration = time.time() - start_time
                 images = np.stack(images, axis=0)
                 cams = np.stack(cams, axis=0)
-                print("ViewNum")
-                print(data[2 * view])
-                import pudb; pudb.set_trace()
+                # import pudb; pudb.set_trace()
                 print('Forward pass: d_min = %f, d_max = %f.' % \
                     (cams[0][1, 3, 0], cams[0][1, 3, 0] + (FLAGS.max_d - 1) * cams[0][1, 3, 1]))
-                # import ipdb;ipdb.set_trace()
-                yield (images, cams, depth_image)#, colmap_image)#, prob_image)
-                print("DC")
+                yield (images, cams, depth_image, colmap_image)#, prob_image)
 
                 # return backward mvs input for GRU
                 if FLAGS.regularization == 'GRU':
@@ -147,7 +150,7 @@ class MVSGenerator:
                     duration = time.time() - start_time
                     print('Back pass: d_min = %f, d_max = %f.' % \
                         (cams[0][1, 3, 0], cams[0][1, 3, 0] + (FLAGS.max_d - 1) * cams[0][1, 3, 1]))
-                    yield (images, cams, depth_image)#, colmap_image)#, prob_image)
+                    yield (images, cams, depth_image, colmap_image)#, prob_image)
 
 def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
@@ -191,12 +194,12 @@ def train(traning_list):
         training_sample_size = training_sample_size * 2
     print ('sample number: ', training_sample_size)
     # from pudb import set_trace; set_trace()
-    with tf.Graph().as_default(), tf.device('/cpu:0'): 
+    with tf.Graph().as_default(), tf.device('/gpu:0'): 
 
         ########## data iterator #########
         # training generators
         training_generator = iter(MVSGenerator(traning_list, FLAGS.view_num))
-        generator_data_type = (tf.float32, tf.float32, tf.float32)#, tf.float32)#, tf.float32)
+        generator_data_type = (tf.float32, tf.float32, tf.float32, tf.float32)#, tf.float32)
         # dataset from generator
         training_set = tf.data.Dataset.from_generator(lambda: training_generator, generator_data_type)
         training_set = training_set.batch(FLAGS.batch_size)
@@ -215,12 +218,11 @@ def train(traning_list):
             with tf.device('/gpu:%d' % i):
                 with tf.name_scope('Model_tower%d' % i) as scope:
                     # generate data
-                    images, cams, depth_image = training_iterator.get_next() # add prob_im, colmap_img
+                    images, cams, depth_image, colmap_img = training_iterator.get_next() # add prob_im
                     images.set_shape(tf.TensorShape([None, FLAGS.view_num, None, None, 3])) 
                     cams.set_shape(tf.TensorShape([None, FLAGS.view_num, 2, 4, 4]))
                     depth_image.set_shape(tf.TensorShape([None, None, None, 1]))
-                    # colmap_img.set_shape(tf.TensorShape([None, None, None, 1]))
-                    # import ipdb;ipdb.set_trace()
+                    colmap_img.set_shape(tf.TensorShape([None, None, None, 1]))
                     # prob_im.set_shape(tf.TensorShape([None, None, None, 1]))
                     depth_start = tf.reshape(
                         tf.slice(cams, [0, 0, 1, 3, 0], [FLAGS.batch_size, 1, 1, 1, 1]), [FLAGS.batch_size])
@@ -230,23 +232,29 @@ def train(traning_list):
                     if i == 0:
                         is_master_gpu = True
 
+                    # images = tf.Print(images, [], "-CULOne ")
+
                     # inference
                     if FLAGS.regularization == '3DCNNs':
 
                         # initial depth map
                         depth_map, prob_map = inference(
                             images, cams, FLAGS.max_d, depth_start, depth_interval, is_master_gpu)
-                        # import ipdb;ipdb.set_trace()
 
                         # refinement
                         if FLAGS.refinement:
                             ref_image = tf.squeeze(
                                 tf.slice(images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
-                            
-                            refined_depth_map = depth_refine(depth_map, ref_image, 
-                                    FLAGS.max_d, depth_start, depth_interval, 
-                                    # colmap_img, depth_start, #prob_im,
-                                    is_master_gpu)
+                            if use_colmap:
+                           	    # ref_image = tf.Print(ref_image, [], "SUPER-CULino ")
+                                refined_depth_map = depth_refine(depth_map, ref_image, 
+                                        FLAGS.max_d, depth_start, depth_interval, 
+                                        colmap_img, depth_start, #prob_im,
+                                        is_master_gpu)
+                            else:
+                                refined_depth_map = depth_refine(depth_map, ref_image, 
+                                        FLAGS.max_d, depth_start, depth_interval, 
+                                        is_master_gpu=is_master_gpu)
                         else:
                             refined_depth_map = depth_map
 
@@ -283,25 +291,25 @@ def train(traning_list):
         # training opt
         train_opt = opt.apply_gradients(grads, global_step=global_step)
 
-        # summary 
+        # # summary 
         summaries.append(tf.summary.scalar('loss', loss))
         summaries.append(tf.summary.scalar('less_one_accuracy', less_one_accuracy))
         summaries.append(tf.summary.scalar('less_three_accuracy', less_three_accuracy))
         summaries.append(tf.summary.scalar('lr', lr_op))
-        weights_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        for var in weights_list:
-            summaries.append(tf.summary.histogram(var.op.name, var))
-        for grad, var in grads:
-            if grad is not None:
-                summaries.append(tf.summary.histogram(var.op.name + '/gradients', grad))
+        # weights_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        # for var in weights_list:
+        #     summaries.append(tf.summary.histogram(var.op.name, var))
+        # for grad, var in grads:
+        #     if grad is not None:
+        #         summaries.append(tf.summary.histogram(var.op.name + '/gradients', grad))
         
-        # saver
+        # # saver
         saver = tf.train.Saver(tf.global_variables(), max_to_keep=None)        
         summary_op = tf.summary.merge(summaries)
 
         # initialization option
         init_op = tf.global_variables_initializer()
-        config = tf.ConfigProto(allow_soft_placement = True)
+        config = tf.ConfigProto(allow_soft_placement = True)#, log_device_placement=True)
         config.gpu_options.allow_growth = True
 
         with tf.Session(config=config) as sess:     
@@ -327,12 +335,14 @@ def train(traning_list):
                 step = 0
                 sess.run(training_iterator.initializer)
                 for _ in range(int(training_sample_size / FLAGS.num_gpus)):
+                    # print("CULETTO")  # ==> "End of dataset"
 
                     # run one batch
                     start_time = time.time()
                     try:
                         out_summary_op, out_opt, out_loss, out_less_one, out_less_three = sess.run(
                         [summary_op, train_opt, loss, less_one_accuracy, less_three_accuracy])
+                        # print("CULOOOOOOOOOOOOOOOOOOOO")  # ==> "End of dataset"
                     except tf.errors.OutOfRangeError:
                         print("End of dataset")  # ==> "End of dataset"
                         break
