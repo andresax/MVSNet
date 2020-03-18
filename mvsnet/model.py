@@ -89,6 +89,9 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
     else:
         ref_tower = UNetDS2GN({'data': ref_image}, is_training=True, reuse=True)
     view_towers = []
+
+
+
     for view in range(1, FLAGS.view_num):
         view_image = tf.squeeze(tf.slice(images, [0, view, 0, 0, 0], [-1, 1, -1, -1, -1]), axis=1)
         view_tower = UNetDS2GN({'data': view_image}, is_training=True, reuse=True)
@@ -100,6 +103,7 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
         view_cam = tf.squeeze(tf.slice(cams, [0, view, 0, 0, 0], [-1, 1, 2, 4, 4]), axis=1)
         homographies = get_homographies(ref_cam, view_cam, depth_num=depth_num,
                                         depth_start=depth_start, depth_interval=depth_interval)
+        # homographies = tf.Print(homographies, [tf.shape(homographies)], "+++++view_homographies() ",summarize=5)
         view_homographies.append(homographies)
 
     # build cost volume by differentialble homography
@@ -112,15 +116,18 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
             for view in range(0, FLAGS.view_num - 1):
                 homography = tf.slice(view_homographies[view], begin=[0, d, 0, 0], size=[-1, 1, 3, 3])
                 homography = tf.squeeze(homography, axis=1)
-                # warped_view_feature = homography_warping(view_towers[view].get_output(), homography)
-                warped_view_feature = tf_transform_homography(view_towers[view].get_output(), homography)
+                warped_view_feature = homography_warping(view_towers[view].get_output(), homography)
+                #warped_view_feature = tf_transform_homography(view_towers[view].get_output(), homography)
                 ave_feature = ave_feature + warped_view_feature
                 ave_feature2 = ave_feature2 + tf.square(warped_view_feature)
             ave_feature = ave_feature / FLAGS.view_num
             ave_feature2 = ave_feature2 / FLAGS.view_num
             cost = ave_feature2 - tf.square(ave_feature)
             depth_costs.append(cost)
+
+
         cost_volume = tf.stack(depth_costs, axis=1)
+
     # import ipdb; ipdb.set_trace()
     # filtered cost volume, size of (B, D, H, W, 1)
     if is_master_gpu:
@@ -136,6 +143,144 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
             tf.scalar_mul(-1, filtered_cost_volume), axis=1, name='prob_volume')
         # depth image by soft argmin
         volume_shape = tf.shape(probability_volume)
+
+
+        soft_2d = []
+        for i in range(FLAGS.batch_size):
+            soft_1d = tf.linspace(depth_start[i], depth_end[i], tf.cast(depth_num, tf.int32))
+            # soft_1d = tf.Print(soft_1d, [tf.shape(soft_1d)], "soft_1d ",summarize=6)
+            soft_2d.append(soft_1d)
+        # soft_2d = tf.Print(soft_2d, [tf.shape(soft_2d)], "soft_2d ",summarize=6)
+        soft_2d = tf.reshape(tf.stack(soft_2d, axis=0), [volume_shape[0], volume_shape[1], 1, 1])
+        # soft_2d = tf.Print(soft_2d, [tf.shape(soft_2d)], "soft_2d ",summarize=6)
+        soft_4d = tf.tile(soft_2d, [1, 1, volume_shape[2], volume_shape[3]])
+        # soft_4d = tf.Print(soft_4d, [tf.shape(soft_4d)], "soft_4d ",summarize=6)
+        
+        # probability_volume = tf.Print(probability_volume, [depth_end,tf.reduce_min(soft_4d),tf.reduce_max(probability_volume),tf.reduce_min(soft_4d),tf.reduce_max(soft_4d)], "soft_4d ",summarize=5)
+        
+       
+        estimated_depth_map = tf.reduce_sum(soft_4d * probability_volume, axis=1)
+        estimated_depth_map = tf.expand_dims(estimated_depth_map, axis=3)
+
+    # probability map
+    prob_map = get_propability_map(probability_volume, estimated_depth_map, depth_start, depth_interval)
+
+    return estimated_depth_map, prob_map  # , filtered_depth_map, probability_volume
+
+
+
+
+def inference_with_init(images, cams, depth_num, depth_start, depth_interval, colmap_img,prob_im, is_master_gpu=True):
+    """ infer depth image from multi-view images and cameras """
+
+    # dynamic gpu params
+    depth_end = depth_start + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
+
+    # reference image
+    ref_image = tf.squeeze(tf.slice(images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
+    ref_cam = tf.squeeze(tf.slice(cams, [0, 0, 0, 0, 0], [-1, 1, 2, 4, 4]), axis=1)
+
+    # image feature extraction
+    if is_master_gpu:
+        ref_tower = UNetDS2GN({'data': ref_image}, is_training=True, reuse=False)
+    else:
+        ref_tower = UNetDS2GN({'data': ref_image}, is_training=True, reuse=True)
+    view_towers = []
+    for view in range(1, FLAGS.view_num):
+        view_image = tf.squeeze(tf.slice(images, [0, view, 0, 0, 0], [-1, 1, -1, -1, -1]), axis=1)
+        view_tower = UNetDS2GN({'data': view_image}, is_training=True, reuse=True)
+        view_towers.append(view_tower)
+
+
+    # get all homographies
+    view_homographies = []
+    tmp_homographies = []
+    for view in range(1, FLAGS.view_num):
+        view_cam = tf.squeeze(tf.slice(cams, [0, view, 0, 0, 0], [-1, 1, 2, 4, 4]), axis=1)
+
+        h = tf.shape(colmap_img)[0]
+        w = tf.shape(colmap_img)[1]
+        # homographiesOrig = get_homographies(ref_cam, view_cam, depth_num=depth_num,
+        #                                 depth_start=depth_start, depth_interval=depth_interval)
+
+        homographies = get_homographies_initialized(ref_cam, view_cam, depth_num=depth_num,
+                                        depth_start=depth_start, depth_interval=depth_interval,
+                                        init_depth=colmap_img, prob_depth=prob_im)
+
+        view_homographies.append(homographies)
+        # tmp_homographies.append(homographiesOrig)
+    
+    # warped0= []
+    # warped1= []
+    # warped2= []
+    # build cost volume by differentialble homography
+    with tf.name_scope('cost_volume_homography'):
+        depth_costs = []
+        for d in range(depth_num):
+            # compute cost (variation metric)
+            ave_feature = ref_tower.get_output()
+            ave_feature2 = tf.square(ref_tower.get_output())
+            for view in range(0, FLAGS.view_num - 1):
+                homography = tf.slice(view_homographies[view], begin=[0, 0,0,d, 0, 0], size=[-1,-1,-1,1, 3, 3])
+                homography = tf.squeeze(homography, axis=3)
+                # homography = tf.Print(homography, [tf.shape(homography)]," view_homographies[view] ",summarize=6)
+                warped_view_feature = homography_warping_multi(view_towers[view].get_output(), homography)              
+
+                # view_image = tf.squeeze(tf.slice(images, [0, view+1, 0, 0, 0], [-1, 1, -1, -1, -1]), axis=1)
+                # homography3 = tf.slice(tmp_homographies[view], begin=[0,d, 0, 0], size=[-1,1, 3, 3])
+                # homography3 = tf.squeeze(homography3, axis=1)
+                # homography2 = tf.slice(view_homographies[view], begin=[0, 0,0,d, 0, 0], size=[-1,1,1,1, 3, 3])
+                # homography2 = tf.squeeze(tf.squeeze(tf.squeeze(homography2, axis=1), axis=1), axis=1)  
+                # resized_image = tf.image.resize_bilinear(view_image, [128, 160])
+                # warped_im0= tf_transform_homography(resized_image, homography2)
+                # warped_im1 = homography_warping(resized_image, homography3)           
+                # warped_im2 = homography_warping_multi(resized_image, homography)           
+                # warped0.append(warped_im0)          
+                # warped1.append(warped_im1)          
+                # warped2.append(warped_im2)
+                ave_feature = ave_feature + warped_view_feature
+                ave_feature2 = ave_feature2 + tf.square(warped_view_feature)
+            ave_feature = ave_feature / FLAGS.view_num
+            ave_feature2 = ave_feature2 / FLAGS.view_num
+            cost = ave_feature2 - tf.square(ave_feature)
+            depth_costs.append(cost)
+        cost_volume = tf.stack(depth_costs, axis=1)
+
+    # filtered cost volume, size of (B, D, H, W, 1)
+    if is_master_gpu:
+        filtered_cost_volume_tower = RegNetUS0({'data': cost_volume}, is_training=True, reuse=False)
+    else:
+        filtered_cost_volume_tower = RegNetUS0({'data': cost_volume}, is_training=True, reuse=True)
+    filtered_cost_volume = tf.squeeze(filtered_cost_volume_tower.get_output(), axis=-1)
+
+    # depth map by softArgmin
+    with tf.name_scope('soft_arg_min'):
+        # probability volume by soft max
+        probability_volume = tf.nn.softmax(
+            tf.scalar_mul(-1, filtered_cost_volume), axis=1, name='prob_volume')
+        # probability_volume = tf.Print(probability_volume, [tf.shape(probability_volume)], "probability_volume ",summarize=6)
+        volume_shape = tf.shape(probability_volume)
+
+        h = tf.shape(colmap_img)[1]
+        w = tf.shape(colmap_img)[2]
+
+        min_depth = depth_start
+        max_depth = depth_start + tf.cast(depth_num, tf.float32)  * depth_interval
+        min_depth_corrected = min_depth + (colmap_img - min_depth) * prob_im # h x w
+        max_depth_corrected = max_depth - (max_depth - colmap_img) * prob_im # h x w
+
+        depthInt = tf.tile(tf.expand_dims(tf.expand_dims(tf.cast(tf.range(depth_num), tf.float32), axis=1), axis=1),[1,h,w])
+        depth_intervals = (max_depth_corrected - min_depth_corrected) / tf.cast(depth_num,tf.float32)
+
+        depth_intervals = tf.cast(depth_interval, tf.float32) * tf.ones_like(min_depth_corrected)
+
+        depth_intervals = tf.squeeze(depth_intervals,axis=3)
+        depth_intervals = tf.expand_dims(depth_intervals,axis=0)
+        # depth2 = depth_start + depthInt * depth_intervals
+        depth = depth_start + depthInt * depth_intervals
+        soft_4d = tf.tile(depth, [FLAGS.batch_size,1,1,1])
+        # soft_4d = tf.Print(soft_4d, [tf.shape(soft_4d)], "soft_4d ",summarize=6)
+
         soft_2d = []
         for i in range(FLAGS.batch_size):
             soft_1d = tf.linspace(depth_start[i], depth_end[i], tf.cast(depth_num, tf.int32))
@@ -148,7 +293,7 @@ def inference(images, cams, depth_num, depth_start, depth_interval, is_master_gp
     # probability map
     prob_map = get_propability_map(probability_volume, estimated_depth_map, depth_start, depth_interval)
 
-    return estimated_depth_map, prob_map  # , filtered_depth_map, probability_volume
+    return estimated_depth_map, prob_map#, warped0[10], warped1[10], warped2[10]  # , filtered_depth_map, probability_volume
 
 
 def inference_mem(images, cams, depth_num, depth_start, depth_interval, is_master_gpu=True):
@@ -467,7 +612,7 @@ def inference_winner_take_all(images, cams, depth_num, depth_start, depth_end,
     return forward_depth_map, max_prob_image / forward_exp_sum
 
 
-def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, colmap_image=None, depth_start_colmap=None, #prob_image,
+def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, colmap_image=None, depth_start_colmap=None, prob_image=None,
  is_master_gpu=True):
     """ refine depth image with the image """
 
@@ -486,10 +631,10 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, 
     # resize normalized image to the same size of depth image
     resized_image = tf.image.resize_bilinear(image, [depth_shape[1], depth_shape[2]])
 
-    if colmap_image:
+    if colmap_image is not None:
         # resize normalized image to the same size of depth image
         resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_image, [depth_shape[1], depth_shape[2]])
-        # resized_prob_image = tf.image.resize_nearest_neighbor(prob_image, [depth_shape[1], depth_shape[2]])
+        resized_prob_image = tf.image.resize_nearest_neighbor(prob_image, [depth_shape[1], depth_shape[2]])
 
         # normalization parameters COLMAP
         depth_end_colmap = depth_start_colmap + (tf.cast(depth_num, tf.float32) - 1) * depth_interval
@@ -505,9 +650,9 @@ def depth_refine(init_depth_map, image, depth_num, depth_start, depth_interval, 
     # refinement network
     if is_master_gpu:
 
-        if colmap_image:
+        if colmap_image is not None:
             norm_depth_tower = RefineNet({'color_image': resized_image, 'depth_image': init_norm_depth_map,
-                                          'colmap_image': norm_colmap_image,# 'prob_image': resized_prob_image
+                                          'colmap_image': norm_colmap_image, 'prob_image': resized_prob_image
                                           },
                                          is_training=True, reuse=False)
         else:

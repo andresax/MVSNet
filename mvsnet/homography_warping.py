@@ -18,8 +18,9 @@ def get_homographies(left_cam, right_cam, depth_num, depth_start, depth_interval
         K_right = tf.slice(right_cam, [0, 1, 0, 0], [-1, 1, 3, 3])
 
         # depth 
-        depth_num = tf.reshape(tf.cast(depth_num, 'int32'), [])
+        depth_num = tf.reshape(tf.cast(depth_num, 'int32'), [])#trasforma nel cazzo di tensore
         depth = depth_start + tf.cast(tf.range(depth_num), tf.float32) * depth_interval
+
         # preparation
         num_depth = tf.shape(depth)[0]
         K_left_inv = tf.linalg.inv(tf.squeeze(K_left, axis=1))
@@ -30,7 +31,7 @@ def get_homographies(left_cam, right_cam, depth_num, depth_start, depth_interval
 
         c_left = -tf.matmul(R_left_trans, tf.squeeze(t_left, axis=1))
         c_right = -tf.matmul(R_right_trans, tf.squeeze(t_right, axis=1))                        # (B, D, 3, 1)
-        c_relative = tf.subtract(c_right, c_left)        
+        c_relative = tf.subtract(c_right, c_left)  
 
         # compute
         batch_size = tf.shape(R_left)[0]
@@ -45,6 +46,69 @@ def get_homographies(left_cam, right_cam, depth_num, depth_start, depth_interval
 
         homographies = tf.matmul(tf.tile(K_right, [1, num_depth, 1, 1])
                      , tf.matmul(tf.tile(R_right, [1, num_depth, 1, 1])
+                     , middle_mat2))
+
+
+
+    return homographies
+
+def get_homographies_initialized(left_cam, right_cam, depth_num, depth_start, depth_interval, init_depth, prob_depth):
+
+    with tf.name_scope('get_homographies_initialized'):
+        R_left = tf.slice(left_cam, [0, 0, 0, 0], [-1, 1, 3, 3])
+        R_right = tf.slice(right_cam, [0, 0, 0, 0], [-1, 1, 3, 3])
+        t_left = tf.slice(left_cam, [0, 0, 0, 3], [-1, 1, 3, 1])
+        t_right = tf.slice(right_cam, [0, 0, 0, 3], [-1, 1, 3, 1])
+        K_left = tf.slice(left_cam, [0, 1, 0, 0], [-1, 1, 3, 3])
+        K_right = tf.slice(right_cam, [0, 1, 0, 0], [-1, 1, 3, 3])
+        
+        depth_num = tf.reshape(tf.cast(depth_num, 'int32'), [])
+
+        batch_size = tf.shape(R_left)[0]
+        h = tf.shape(init_depth)[1]
+        w = tf.shape(init_depth)[2]
+
+        tf.ones_like(init_depth)
+
+        min_depth = depth_start
+        max_depth = depth_start + tf.cast(depth_num, tf.float32)  * depth_interval
+        min_depth_corrected = min_depth + (init_depth - min_depth) * prob_depth # h x w
+        max_depth_corrected = max_depth - (max_depth - init_depth) * prob_depth # h x w
+
+        depthInt = tf.tile(tf.expand_dims(tf.expand_dims(tf.cast(tf.range(depth_num), tf.float32), axis=0), axis=0),[h,w,1])
+        depth_intervals = (max_depth_corrected - min_depth_corrected) / tf.cast(depth_num,tf.float32)
+        # depth_intervals = tf.Print(depth_intervals,[tf.shape(depth_intervals)], "depth_intervals ",summarize=259)
+
+        depth_intervalN = tf.cast(depth_interval, tf.float32)  *tf.ones_like(min_depth_corrected)
+        # depth_intervalN = tf.Print(depth_intervalN,[tf.shape(depth_intervalN)], "depth_intervalN ",summarize=259)
+        depth2 = depth_start + depthInt * depth_intervalN
+        # depth2 = tf.Print(depth2,[tf.shape(depth2)], "depth2 ",summarize=259)
+        
+        # preparation
+        num_depth = tf.shape(depth2)[3]
+        K_left_inv = tf.linalg.inv(tf.squeeze(K_left, axis=1))
+        R_left_trans = tf.transpose(tf.squeeze(R_left, axis=1), perm=[0, 2, 1])
+        R_right_trans = tf.transpose(tf.squeeze(R_right, axis=1), perm=[0, 2, 1])
+        fronto_direction = tf.slice(tf.squeeze(R_left, axis=1), [0, 2, 0], [-1, 1, 3])          # (B, D, 1, 3)
+        c_left = -tf.matmul(R_left_trans, tf.squeeze(t_left, axis=1))
+        c_right = -tf.matmul(R_right_trans, tf.squeeze(t_right, axis=1))                        # (B, D, 3, 1)
+        c_relative = tf.subtract(c_right, c_left)  
+
+        # compute
+        temp_vec = tf.matmul(c_relative, fronto_direction)
+
+        # temp_vec = tf.Print(temp_vec,[tf.shape(temp_vec),temp_vec], "temp_vec ",summarize=259)
+        depth_mat = tf.tile(tf.reshape(depth2, [batch_size, h,w, num_depth, 1, 1]), [1, 1, 1 ,1, 3, 3])
+        temp_vec = tf.tile(tf.expand_dims(tf.expand_dims(tf.expand_dims(temp_vec, axis=1), axis=1), axis=1), [1, h,w, num_depth, 1, 1])
+        # depth_mat = tf.Print(depth_mat,[tf.shape(depth_mat),depth_mat], "depth_mat ",summarize=259)
+        # temp_vec = tf.Print(temp_vec,[tf.shape(temp_vec),temp_vec[0,0,0,0,1:3,1:3]], "temp_vecNEW ",summarize=259)
+
+        middle_mat0 = tf.eye(3, batch_shape=[batch_size,h,w,  num_depth]) - temp_vec / depth_mat
+        middle_mat1 = tf.tile(tf.expand_dims(tf.expand_dims(tf.expand_dims(tf.matmul(R_left_trans, K_left_inv), axis=1), axis=1), axis=1), [1, h,w, num_depth, 1, 1])
+        middle_mat2 = tf.matmul(middle_mat0, middle_mat1)
+
+        homographies = tf.matmul(tf.tile(tf.expand_dims(tf.expand_dims(K_right, axis=1), axis=1), [1, h,w,  num_depth, 1, 1])
+                     , tf.matmul(tf.tile(tf.expand_dims(tf.expand_dims(R_right, axis=1), axis=1), [1, h,w, num_depth, 1, 1])
                      , middle_mat2))
 
     return homographies
@@ -180,17 +244,57 @@ def homography_warping(input_image, homography):
         pixel_grids = get_pixel_grids(height, width)
         pixel_grids = tf.expand_dims(pixel_grids, 0)
         pixel_grids = tf.tile(pixel_grids, [batch_size, 1])
-        pixel_grids = tf.reshape(pixel_grids, (batch_size, 3, -1))
+        pixel_grids = tf.reshape(pixel_grids, (batch_size, 3, -1))# 1,3,w*h
         # return pixel_grids
 
         # affine + divide tranform, output (B, 2, (W+1) x (H+1))
+        grids_affine = tf.matmul(affine_mat, pixel_grids) # 1,2,w*h
+        grids_div = tf.matmul(div_mat, pixel_grids) #1,1,w*h
+        grids_zero_add = tf.cast(tf.equal(grids_div, 0.0), dtype='float32') * 1e-7 # handle div 0 #
+        grids_div = grids_div + grids_zero_add # 1,1,w*h
+        grids_div = tf.tile(grids_div, [1, 2, 1]) # 1,2,w*h
+        grids_inv_warped = tf.div(grids_affine, grids_div) # 1,2,w*h
+        x_warped, y_warped = tf.unstack(grids_inv_warped, axis=1) #
+        x_warped_flatten = tf.reshape(x_warped, [-1]) #
+        y_warped_flatten = tf.reshape(y_warped, [-1]) #
+
+        # interpolation
+        warped_image = interpolate(input_image, x_warped_flatten, y_warped_flatten)
+        warped_image = tf.reshape(warped_image, shape=image_shape, name='warped_feature')
+
+    # return input_image
+    return warped_image
+
+
+
+
+def homography_warping_multi(input_image, homography):
+    with tf.name_scope('warping_by_homography'):
+        image_shape = tf.shape(input_image)
+        batch_size = image_shape[0]
+        height = image_shape[1]
+        width = image_shape[2]
+        # turn homography to affine_mat of size (B, W, H, 2, 3) and div_mat of size (B, W, H,  1, 3)
+        affine_mat = tf.slice(homography, [0, 0, 0, 0, 0], [-1, -1, -1, 2, 3])
+        div_mat = tf.slice(homography, [0, 0, 0, 2, 0], [-1,-1, -1,  1, 3])
+
+
+        # generate pixel grids of size (B, 3, (W+1) x (H+1))
+        pixel_grids = get_pixel_grids(height, width)
+        pixel_grids = tf.expand_dims(pixel_grids, 0)
+        pixel_grids = tf.tile(pixel_grids, [batch_size, 1]) 
+        pixel_grids = tf.reshape(pixel_grids, (batch_size, 3, -1))
+        pixel_grids = tf.reshape(pixel_grids, (batch_size, 3, height,width))
+        pixel_grids = tf.expand_dims(pixel_grids, 2)
+        pixel_grids = tf.transpose(pixel_grids,perm=[0,3,4,1,2])
+
         grids_affine = tf.matmul(affine_mat, pixel_grids)
         grids_div = tf.matmul(div_mat, pixel_grids)
         grids_zero_add = tf.cast(tf.equal(grids_div, 0.0), dtype='float32') * 1e-7 # handle div 0
         grids_div = grids_div + grids_zero_add
-        grids_div = tf.tile(grids_div, [1, 2, 1])
+        grids_div = tf.tile(grids_div, [1,1,1, 2, 1])
         grids_inv_warped = tf.div(grids_affine, grids_div)
-        x_warped, y_warped = tf.unstack(grids_inv_warped, axis=1)
+        x_warped, y_warped = tf.unstack(grids_inv_warped, axis=3)
         x_warped_flatten = tf.reshape(x_warped, [-1])
         y_warped_flatten = tf.reshape(y_warped, [-1])
 
@@ -205,6 +309,9 @@ def tf_transform_homography(input_image, homography):
 	# tf.contrib.image.transform is for pixel coordinate but our
 	# homograph parameters are for image coordinate (x_p = x_i + 0.5).
 	# So need to change the corresponding homography parameters 
+    # homography = tf.Print(homography, [tf.shape(homography)], " homo init ")
+
+
     homography = tf.reshape(homography, [-1, 9])
     a0 = tf.slice(homography, [0, 0], [-1, 1])
     a1 = tf.slice(homography, [0, 1], [-1, 1])
@@ -237,11 +344,20 @@ def tf_transform_homography(input_image, homography):
     homography = tf.stack(homo, axis=1)
     homography = tf.reshape(homography, [-1, 9])
 
+
+    # homography = tf.Print(homography, [], " homo 1 ")
+
+
+
     homography_linear = tf.slice(homography, begin=[0, 0], size=[-1, 8])
     homography_linear_div = tf.tile(tf.slice(homography, begin=[0, 8], size=[-1, 1]), [1, 8])
+
+    # homography_linear_div = tf.Print(homography_linear_div, [tf.shape(homography_linear_div)], " homography_linear_div ")
     homography_linear = tf.div(homography_linear, homography_linear_div)
+    # homography_linear = tf.Print(homography_linear, [tf.shape(homography_linear)], " homography_linear ")
     warped_image = tf.contrib.image.transform(
         input_image, homography_linear, interpolation='BILINEAR')
+    # warped_image = tf.Print(warped_image, [tf.shape(warped_image)], " warped_image ")
 
     # return input_image
     return warped_image

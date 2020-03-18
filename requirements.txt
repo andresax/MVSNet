@@ -15,6 +15,7 @@ pprint
 sacred
 scikit-learn
 scikit-image
+sklearn
 sklearn-extras
 tensorboardX
 tqdm
@@ -23,4 +24,8 @@ pudb
 configargparse
 termcolor
 pyserial
+h5py
+ipykernel
+jupyter
 gast==0.2.2
+opencv-python

@@ -154,7 +154,7 @@ class RefineNet(Network):
 
     def setup(self):
 
-        (self.feed('color_image', 'depth_image')#, 'colmap_image', 'prob_image')
+        (self.feed('color_image', 'depth_image', 'colmap_image', 'prob_image')
         .concat(axis=3, name='concat_image'))
 
         (self.feed('concat_image')

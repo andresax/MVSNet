@@ -110,7 +110,8 @@ def mask_depth_image(depth_image, min_depth, max_depth):
 def load_bin(file_path, w, h):
     """read bin file"""
     f = open(file_path, 'rb')
-    position = 0
+    # import ipdb; ipdb.set_trace()
+    position = 12
     no_of_floats = w * h
     f.seek(position, 0)
     bin_image = np.fromfile(f, dtype=np.dtype('f'), count=no_of_floats)

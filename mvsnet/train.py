@@ -7,11 +7,18 @@ Training script.
 from __future__ import print_function
 
 import os
+import os.path
 import time
 import sys
 import math
 import argparse
 from random import randint
+import sacred
+from sacred import Experiment
+from sacred.observers import MongoObserver
+
+from getpass import getpass
+
 
 import cv2
 import numpy as np
@@ -26,6 +33,18 @@ from preprocess import *
 from model import *
 from loss import * 
 from homography_warping import get_homographies, homography_warping
+
+
+
+# username = os.environ['LOGNAME'] # If you are using run-docker
+# serverip = os.environ['MONGOIP'] # If you are using run-docker
+# password = getpass()
+# uri = "mongodb://{}:{}@{}/?authSource=admin".format(username, password, serverip)
+
+# obs = MongoObserver.create(uri, 'romanoni_db')
+
+# ex = Experiment()
+
 
 # paths
 tf.app.flags.DEFINE_string('dtu_data_root', '/data/dtu/', 
@@ -46,11 +65,11 @@ tf.app.flags.DEFINE_integer('ckpt_step', 5,
 # input parameters
 tf.app.flags.DEFINE_integer('view_num', 3, 
                             """Number of images (1 ref image and view_num - 1 view images).""")
-tf.app.flags.DEFINE_integer('max_d', 192, #192, 
+tf.app.flags.DEFINE_integer('max_d', 96, #192, 
                             """Maximum depth step when training.""")
-tf.app.flags.DEFINE_integer('max_w', 640,#640, 
+tf.app.flags.DEFINE_integer('max_w', 500,#640, 
                             """Maximum image width when training.""")
-tf.app.flags.DEFINE_integer('max_h', 512,#512, 
+tf.app.flags.DEFINE_integer('max_h', 375,#512, 
                             """Maximum image height when training.""")
 tf.app.flags.DEFINE_float('sample_scale', 0.25, 
                             """Downsample scale for building cost volume.""")
@@ -86,7 +105,7 @@ tf.app.flags.DEFINE_float('gamma', 0.9,
 
 FLAGS = tf.app.flags.FLAGS
 
-log_dir2 = log_dir2 + '/col_' + str(FLAGS.use_colmap) +  \
+FLAGS.log_dir2 = FLAGS.log_dir2 + '/col_prob_dbg_' + str(FLAGS.use_colmap) +  \
     '_views_' + str(FLAGS.view_num) + '_' + str(FLAGS.max_d) + \
     '_' + str(FLAGS.max_w) + '_' + str(FLAGS.max_h) + \
     '_sc_' + str(FLAGS.sample_scale) + '_' + str(FLAGS.interval_scale) + \
@@ -114,21 +133,43 @@ class MVSGenerator:
                 for view in range(self.view_num):
                     image = center_image(cv2.imread(data[4 * view]))#2 to 4 after colmap added
                     cam = load_cam(open(data[4 * view + 1]))
-                    cam[1][3][1] = cam[1][3][1] * FLAGS.interval_scale
+                    cam[1][3][1] = cam[1][3][1] * FLAGS.interval_scale * 192/96
                     images.append(image)
                     cams.append(cam)
                 with open(data[4 * self.view_num], 'rb') as f:
                     depth_image = load_pfm(f)
+                
+                
+                colmap_image = load_bin(data[4 * view + 2],1200,1600)
 
-                colmap_image = load_bin(data[4 * view + 2],1600,1200)
+                if os.path.isfile(data[4 * view + 3]):
+                    prob_image = load_bin(data[4 * view + 3],1200,1600)
+                else:
+                    prob_image = np.zeros([1200,1600,1], np.float32) 
 
-                # colmap_image = np.zeros([1600,1200,1], np.float32) 
-
-                # prob_image = load_bin(data[4 * view + 3],1600,1200)
+                # import ipdb; ipdb.set_trace()
                 # mask out-of-range depth pixels (in a relaxed range)
                 depth_start = cams[0][1, 3, 0] + cams[0][1, 3, 1]
                 depth_end = cams[0][1, 3, 0] + (FLAGS.max_d - 2) * cams[0][1, 3, 1]
 
+                maskMin = colmap_image<depth_start
+                maskMax = colmap_image>depth_end
+                prob_image[maskMin]=0
+                prob_image[maskMax]=0
+
+                colmap_image = np.minimum(colmap_image, depth_end)
+                colmap_image = np.maximum(colmap_image, depth_start)
+                # colmap_image = mask_depth_image(colmap_image, depth_start, depth_end)
+
+                cropx = 1280
+                cropy = 1024
+                y= colmap_image.shape[0]
+                x= colmap_image.shape[1]
+                startx = x//2-(cropx//2)
+                starty = y//2-(cropy//2)    
+                
+                colmap_image = colmap_image[starty:starty+cropy,startx:startx+cropx,:]
+                prob_image = prob_image[starty:starty+cropy,startx:startx+cropx,:]
                 depth_image = mask_depth_image(depth_image, depth_start, depth_end)
 
                 # return mvs input
@@ -136,10 +177,7 @@ class MVSGenerator:
                 duration = time.time() - start_time
                 images = np.stack(images, axis=0)
                 cams = np.stack(cams, axis=0)
-                # import pudb; pudb.set_trace()
-                print('Forward pass: d_min = %f, d_max = %f.' % \
-                    (cams[0][1, 3, 0], cams[0][1, 3, 0] + (FLAGS.max_d - 1) * cams[0][1, 3, 1]))
-                yield (images, cams, depth_image, colmap_image)#, prob_image)
+                yield (images, cams, depth_image, colmap_image, prob_image)
 
                 # return backward mvs input for GRU
                 if FLAGS.regularization == 'GRU':
@@ -150,7 +188,7 @@ class MVSGenerator:
                     duration = time.time() - start_time
                     print('Back pass: d_min = %f, d_max = %f.' % \
                         (cams[0][1, 3, 0], cams[0][1, 3, 0] + (FLAGS.max_d - 1) * cams[0][1, 3, 1]))
-                    yield (images, cams, depth_image, colmap_image)#, prob_image)
+                    yield (images, cams, depth_image, colmap_image, prob_image)
 
 def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
@@ -199,7 +237,7 @@ def train(traning_list):
         ########## data iterator #########
         # training generators
         training_generator = iter(MVSGenerator(traning_list, FLAGS.view_num))
-        generator_data_type = (tf.float32, tf.float32, tf.float32, tf.float32)#, tf.float32)
+        generator_data_type = (tf.float32, tf.float32, tf.float32, tf.float32, tf.float32)
         # dataset from generator
         training_set = tf.data.Dataset.from_generator(lambda: training_generator, generator_data_type)
         training_set = training_set.batch(FLAGS.batch_size)
@@ -218,38 +256,61 @@ def train(traning_list):
             with tf.device('/gpu:%d' % i):
                 with tf.name_scope('Model_tower%d' % i) as scope:
                     # generate data
-                    images, cams, depth_image, colmap_img = training_iterator.get_next() # add prob_im
+                    images, cams, depth_image, colmap_img, prob_im = training_iterator.get_next() # add prob_im
                     images.set_shape(tf.TensorShape([None, FLAGS.view_num, None, None, 3])) 
                     cams.set_shape(tf.TensorShape([None, FLAGS.view_num, 2, 4, 4]))
                     depth_image.set_shape(tf.TensorShape([None, None, None, 1]))
                     colmap_img.set_shape(tf.TensorShape([None, None, None, 1]))
-                    # prob_im.set_shape(tf.TensorShape([None, None, None, 1]))
+                    prob_im.set_shape(tf.TensorShape([None, None, None, 1]))
                     depth_start = tf.reshape(
                         tf.slice(cams, [0, 0, 1, 3, 0], [FLAGS.batch_size, 1, 1, 1, 1]), [FLAGS.batch_size])
                     depth_interval = tf.reshape(
                         tf.slice(cams, [0, 0, 1, 3, 1], [FLAGS.batch_size, 1, 1, 1, 1]), [FLAGS.batch_size])
+
+
                     is_master_gpu = False
                     if i == 0:
                         is_master_gpu = True
-
-                    # images = tf.Print(images, [], "-CULOne ")
 
                     # inference
                     if FLAGS.regularization == '3DCNNs':
 
                         # initial depth map
-                        depth_map, prob_map = inference(
-                            images, cams, FLAGS.max_d, depth_start, depth_interval, is_master_gpu)
+                        if FLAGS.use_colmap:
+                            ref_image = tf.squeeze(tf.slice(images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
+                            depth_shape = tf.shape(ref_image)
+                            depth_shape = depth_shape /4
+                            depth_shape = tf.cast(depth_shape,tf.int32)
+                            # resize normalized image to the same size of depth image
+                            resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_img, [depth_shape[1], depth_shape[2]])
+                            resized_prob_image = tf.image.resize_nearest_neighbor(prob_im, [depth_shape[1], depth_shape[2]])
+
+                            tmp = depth_image
+                            tmp_prob = 0.75 * tf.ones(tf.shape(depth_image))
+
+                            depth_map, prob_map = inference_with_init(
+                                images, cams, FLAGS.max_d, depth_start, depth_interval,tmp,tmp_prob, is_master_gpu)
+                            # depth_map, prob_map = inference_with_init(
+                            #     images, cams, FLAGS.max_d, depth_start, depth_interval,resized_colmap_image,resized_prob_image, is_master_gpu)
+                        else:
+                            depth_map, prob_map = inference(
+                                images, cams, FLAGS.max_d, depth_start, depth_interval, is_master_gpu)
 
                         # refinement
                         if FLAGS.refinement:
                             ref_image = tf.squeeze(
                                 tf.slice(images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
-                            if use_colmap:
-                           	    # ref_image = tf.Print(ref_image, [], "SUPER-CULino ")
+                            if FLAGS.use_colmap:
+
+                                depth_shape = tf.shape(depth_map)
+                                # resize normalized image to the same size of depth image
+                                resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_img, [depth_shape[1], depth_shape[2]])
+                                resized_prob_image = tf.image.resize_nearest_neighbor(prob_im, [depth_shape[1], depth_shape[2]])
+                           	    
+
                                 refined_depth_map = depth_refine(depth_map, ref_image, 
                                         FLAGS.max_d, depth_start, depth_interval, 
-                                        colmap_img, depth_start, #prob_im,
+                                        resized_colmap_image, depth_start, resized_prob_image,
                                         is_master_gpu)
                             else:
                                 refined_depth_map = depth_refine(depth_map, ref_image, 
@@ -278,6 +339,14 @@ def train(traning_list):
                     
                     # retain the summaries from the final tower.
                     summaries =  tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+                    # depth_map = tf.Print(depth_map, [tf.reduce_mean(resized_colmap_image), tf.reduce_min(resized_colmap_image), tf.reduce_max(resized_colmap_image)], "diffGT_COLMAP ",summarize=5)
+                    # depth_image = tf.Print(depth_map, [tf.shape(depth_image), tf.reduce_min(depth_image), tf.reduce_max(depth_image)], "depth_image ",summarize=5)
+        
+                    summaries.append(tf.summary.image("depth_map", depth_map))
+                    summaries.append(tf.summary.image("GT", depth_image))
+
+                    # if FLAGS.use_colmap:
+                        # summaries.append(tf.summary.image("COLMAP", colmap_img))
 
                     # calculate the gradients for the batch of data on this CIFAR tower.
                     grads = opt.compute_gradients(loss)
@@ -295,7 +364,8 @@ def train(traning_list):
         summaries.append(tf.summary.scalar('loss', loss))
         summaries.append(tf.summary.scalar('less_one_accuracy', less_one_accuracy))
         summaries.append(tf.summary.scalar('less_three_accuracy', less_three_accuracy))
-        summaries.append(tf.summary.scalar('lr', lr_op))
+        summaries.append(tf.summary.scalar('lr', lr_op)) 
+
         # weights_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         # for var in weights_list:
         #     summaries.append(tf.summary.histogram(var.op.name, var))
@@ -335,18 +405,17 @@ def train(traning_list):
                 step = 0
                 sess.run(training_iterator.initializer)
                 for _ in range(int(training_sample_size / FLAGS.num_gpus)):
-                    # print("CULETTO")  # ==> "End of dataset"
 
                     # run one batch
                     start_time = time.time()
                     try:
                         out_summary_op, out_opt, out_loss, out_less_one, out_less_three = sess.run(
                         [summary_op, train_opt, loss, less_one_accuracy, less_three_accuracy])
-                        # print("CULOOOOOOOOOOOOOOOOOOOO")  # ==> "End of dataset"
                     except tf.errors.OutOfRangeError:
                         print("End of dataset")  # ==> "End of dataset"
                         break
                     duration = time.time() - start_time
+
 
                     # print info
                     if step % FLAGS.display == 0:
@@ -369,6 +438,7 @@ def train(traning_list):
                     step += FLAGS.batch_size * FLAGS.num_gpus
                     total_step += FLAGS.batch_size * FLAGS.num_gpus
 
+# @ex.automain
 def main(argv=None):  # pylint: disable=unused-argument
     """ program entrance """
     # Prepare all training samples
