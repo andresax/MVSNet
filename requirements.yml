@@ -1,0 +1,11 @@
+channels:
+  - conda-forge
+dependencies:
+  - matplotlib
+  - opencv
+  - Pillow
+  - progressbar2
+  - scipy
+  - scikit-learn
+  - pyserial
+  - gast=0.2.2

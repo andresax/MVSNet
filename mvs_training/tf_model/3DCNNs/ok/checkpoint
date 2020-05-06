@@ -1,0 +1,2 @@
+model_checkpoint_path: "/data/tf_model/3DCNNs/model.ckpt-85000"
+all_model_checkpoint_paths: "/data/tf_model/3DCNNs/model.ckpt-85000"

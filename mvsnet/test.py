@@ -23,7 +23,7 @@ from model import *
 from loss import *
 
 # dataset parameters
-tf.app.flags.DEFINE_string('dense_folder', None, 
+tf.app.flags.DEFINE_string('dense_folder', '/data/dtu_test/', 
                            """Root path to dense folder.""")
 tf.app.flags.DEFINE_string('model_dir', 
                            '/data/tf_model',
@@ -34,15 +34,15 @@ tf.app.flags.DEFINE_integer('ckpt_step', 100000,
 # input parameters
 tf.app.flags.DEFINE_integer('view_num', 5,
                             """Number of images (1 ref image and view_num - 1 view images).""")
-tf.app.flags.DEFINE_integer('max_d', 256, 
+tf.app.flags.DEFINE_integer('max_d', 128, 
                             """Maximum depth step when testing.""")
-tf.app.flags.DEFINE_integer('max_w', 1600, 
+tf.app.flags.DEFINE_integer('max_w', 1152 , 
                             """Maximum image width when testing.""")
-tf.app.flags.DEFINE_integer('max_h', 1200, 
+tf.app.flags.DEFINE_integer('max_h', 864, 
                             """Maximum image height when testing.""")
 tf.app.flags.DEFINE_float('sample_scale', 0.25, 
                             """Downsample scale for building cost volume (W and H).""")
-tf.app.flags.DEFINE_float('interval_scale', 0.8, 
+tf.app.flags.DEFINE_float('interval_scale', 1.06, 
                             """Downsample scale for building cost volume (D).""")
 tf.app.flags.DEFINE_float('base_image_size', 8, 
                             """Base image size""")
@@ -52,13 +52,14 @@ tf.app.flags.DEFINE_bool('adaptive_scaling', True,
                             """Let image size to fit the network, including 'scaling', 'cropping'""")
 
 # network architecture
-tf.app.flags.DEFINE_string('regularization', 'GRU',
+tf.app.flags.DEFINE_string('regularization', '3DCNNs',
                            """Regularization method, including '3DCNNs' and 'GRU'""")
 tf.app.flags.DEFINE_boolean('refinement', False,
                            """Whether to apply depth map refinement for MVSNet""")
-tf.app.flags.DEFINE_bool('inverse_depth', True,
+tf.app.flags.DEFINE_bool('inverse_depth', False,
                            """Whether to apply inverse depth for R-MVSNet""")
-
+tf.app.flags.DEFINE_boolean('use_colmap', True, 
+                            """Whether to train.""")
 FLAGS = tf.app.flags.FLAGS
 
 class MVSGenerator:
@@ -77,18 +78,57 @@ class MVSGenerator:
                 images = []
                 cams = []
                 image_index = int(os.path.splitext(os.path.basename(data[0]))[0])
-                selected_view_num = int(len(data) / 2)
+                selected_view_num = int(len(data) / 4)
 
                 for view in range(min(self.view_num, selected_view_num)):
-                    image_file = file_io.FileIO(data[2 * view], mode='r')
+                    image_file = file_io.FileIO(data[4 * view], mode='r')
                     image = scipy.misc.imread(image_file, mode='RGB')
                     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                    cam_file = file_io.FileIO(data[2 * view + 1], mode='r')
+                    cam_file = file_io.FileIO(data[4 * view + 1], mode='r')
                     cam = load_cam(cam_file, FLAGS.interval_scale)
                     if cam[1][3][2] == 0:
                         cam[1][3][2] = FLAGS.max_d
                     images.append(image)
                     cams.append(cam)
+
+
+                colmap_image = load_bin(data[4 * view + 2],1200,1600)
+
+                if os.path.isfile(data[4 * view + 3]):
+                    prob_image = load_bin(data[4 * view + 3],1200,1600)
+                else:
+                    prob_image = np.zeros([1200,1600,1], np.float32) 
+
+                if (
+                    (np.mean(colmap_image)>-0.00000001 and np.mean(colmap_image)<0.00000001) or 
+                    (np.mean(prob_image)>-0.00000001  and np.mean(prob_image)<0.00000001)
+                    ):
+                    continue
+
+                # import ipdb; ipdb.set_trace()
+                # mask out-of-range depth pixels (in a relaxed range)
+                depth_start = cams[0][1, 3, 0] + cams[0][1, 3, 1]
+                depth_end = cams[0][1, 3, 0] + (FLAGS.max_d - 2) * cams[0][1, 3, 1]
+
+                maskMin = colmap_image<depth_start
+                maskMax = colmap_image>depth_end
+                prob_image[maskMin]=0
+                prob_image[maskMax]=0
+                import ipdb; ipdb.set_trace()
+                colmap_image = np.minimum(colmap_image, depth_end)
+                colmap_image = np.maximum(colmap_image, depth_start)
+                # colmap_image = mask_depth_image(colmap_image, depth_start, depth_end)
+
+                # cropx = 1280
+                # cropy = 1024
+                # y= colmap_image.shape[0]
+                # x= colmap_image.shape[1]
+                # startx = x//2-(cropx//2)
+                # starty = y//2-(cropy//2)    
+                
+                # colmap_image = colmap_image[starty:starty+cropy,startx:startx+cropx,:]
+                # prob_image = prob_image[starty:starty+cropy,startx:startx+cropx,:]
+                
 
                 if selected_view_num < self.view_num:
                     for view in range(selected_view_num, self.view_num):
@@ -141,7 +181,7 @@ class MVSGenerator:
                 croped_images = np.stack(croped_images, axis=0)
                 scaled_cams = np.stack(scaled_cams, axis=0)
                 self.counter += 1
-                yield (scaled_images, centered_images, scaled_cams, image_index) 
+                yield (scaled_images, centered_images, scaled_cams, image_index, colmap_image, prob_image) 
 
 def mvsnet_pipeline(mvs_list):
 
@@ -155,19 +195,21 @@ def mvsnet_pipeline(mvs_list):
 
     # testing set
     mvs_generator = iter(MVSGenerator(mvs_list, FLAGS.view_num))
-    generator_data_type = (tf.float32, tf.float32, tf.float32, tf.int32)   
+    generator_data_type = (tf.float32, tf.float32, tf.float32, tf.int32, tf.float32, tf.float32)   
     mvs_set = tf.data.Dataset.from_generator(lambda: mvs_generator, generator_data_type)
     mvs_set = mvs_set.batch(FLAGS.batch_size)
     mvs_set = mvs_set.prefetch(buffer_size=1)
 
     # data from dataset via iterator
     mvs_iterator = mvs_set.make_initializable_iterator()
-    scaled_images, centered_images, scaled_cams, image_index = mvs_iterator.get_next()
+    scaled_images, centered_images, scaled_cams, image_index, colmap_img, prob_im  = mvs_iterator.get_next()
 
     # set shapes
     scaled_images.set_shape(tf.TensorShape([None, FLAGS.view_num, None, None, 3]))
     centered_images.set_shape(tf.TensorShape([None, FLAGS.view_num, None, None, 3]))
     scaled_cams.set_shape(tf.TensorShape([None, FLAGS.view_num, 2, 4, 4]))
+    colmap_img.set_shape(tf.TensorShape([None, None, None, 1]))
+    prob_im.set_shape(tf.TensorShape([None, None, None, 1]))
     depth_start = tf.reshape(
         tf.slice(scaled_cams, [0, 0, 1, 3, 0], [FLAGS.batch_size, 1, 1, 1, 1]), [FLAGS.batch_size])
     depth_interval = tf.reshape(
@@ -184,13 +226,44 @@ def mvsnet_pipeline(mvs_list):
 
     # depth map inference using 3DCNNs
     if FLAGS.regularization == '3DCNNs':
-        init_depth_map, prob_map = inference_mem(
+        if FLAGS.use_colmap:
+            ref_image = tf.squeeze(tf.slice(images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
+            depth_shape = tf.shape(centered_images)
+            # depth_shape = depth_shape /4
+            depth_shape = tf.cast(depth_shape,tf.int32)
+            # resize normalized image to the same size of depth image
+            resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_img, [depth_shape[1], depth_shape[2]])
+            resized_prob_image = tf.image.resize_nearest_neighbor(prob_im, [depth_shape[1], depth_shape[2]])
+
+            init_depth_map, prob_map = inference_mem_with_init(
+                centered_images, scaled_cams, FLAGS.max_d, depth_start, depth_interval,resized_colmap_image,resized_prob_image)
+        else:
+            init_depth_map, prob_map = inference_mem(
             centered_images, scaled_cams, FLAGS.max_d, depth_start, depth_interval)
 
         if FLAGS.refinement:
             ref_image = tf.squeeze(tf.slice(centered_images, [0, 0, 0, 0, 0], [-1, 1, -1, -1, 3]), axis=1)
-            refined_depth_map = depth_refine(
-                init_depth_map, ref_image, FLAGS.max_d, depth_start, depth_interval, True)
+        if FLAGS.use_colmap:
+
+            depth_shape = tf.shape(depth_map)
+            # resize normalized image to the same size of depth image
+            resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_img, [depth_shape[1], depth_shape[2]])
+            resized_prob_image = tf.image.resize_nearest_neighbor(prob_im, [depth_shape[1], depth_shape[2]])
+                
+
+            refined_depth_map = depth_refine(depth_map, ref_image, 
+                    FLAGS.max_d, depth_start, depth_interval, 
+                    resized_colmap_image, depth_start, resized_prob_image,
+                    is_master_gpu)
+        else:
+            refined_depth_map = depth_refine(depth_map, ref_image, 
+                    FLAGS.max_d, depth_start, depth_interval, 
+                    is_master_gpu=is_master_gpu)    
+
+
+
+            # refined_depth_map = depth_refine(
+            #     init_depth_map, ref_image, FLAGS.max_d, depth_start, depth_interval, True)
 
     # depth map inference using GRU
     elif FLAGS.regularization == 'GRU':

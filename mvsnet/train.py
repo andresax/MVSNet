@@ -65,7 +65,7 @@ tf.app.flags.DEFINE_integer('ckpt_step', 5,
 # input parameters
 tf.app.flags.DEFINE_integer('view_num', 3, 
                             """Number of images (1 ref image and view_num - 1 view images).""")
-tf.app.flags.DEFINE_integer('max_d', 96, #192, 
+tf.app.flags.DEFINE_integer('max_d', 128, #192, 
                             """Maximum depth step when training.""")
 tf.app.flags.DEFINE_integer('max_w', 500,#640, 
                             """Maximum image width when training.""")
@@ -99,13 +99,13 @@ tf.app.flags.DEFINE_integer('stepvalue', 10000,
                             """Step interval to decay learning rate.""")
 tf.app.flags.DEFINE_integer('snapshot', 5000,
                             """Step interval to save the model.""")
-tf.app.flags.DEFINE_float('gamma', 0.9,
+tf.app.flags.DEFINE_float('gamma', 0.85,
                           """Learning rate decay rate.""")
 
 
 FLAGS = tf.app.flags.FLAGS
 
-FLAGS.log_dir2 = FLAGS.log_dir2 + '/col_prob_dbg_' + str(FLAGS.use_colmap) +  \
+FLAGS.log_dir2 = FLAGS.log_dir2 + '/col_prob_colmap_filt_zeros_prob-1.5_' + str(FLAGS.use_colmap) +  \
     '_views_' + str(FLAGS.view_num) + '_' + str(FLAGS.max_d) + \
     '_' + str(FLAGS.max_w) + '_' + str(FLAGS.max_h) + \
     '_sc_' + str(FLAGS.sample_scale) + '_' + str(FLAGS.interval_scale) + \
@@ -146,6 +146,12 @@ class MVSGenerator:
                     prob_image = load_bin(data[4 * view + 3],1200,1600)
                 else:
                     prob_image = np.zeros([1200,1600,1], np.float32) 
+
+                if (
+                    (np.mean(colmap_image)>-0.00000001 and np.mean(colmap_image)<0.00000001) or 
+                    (np.mean(prob_image)>-0.00000001  and np.mean(prob_image)<0.00000001)
+                    ):
+                    continue
 
                 # import ipdb; ipdb.set_trace()
                 # mask out-of-range depth pixels (in a relaxed range)
@@ -256,7 +262,9 @@ def train(traning_list):
             with tf.device('/gpu:%d' % i):
                 with tf.name_scope('Model_tower%d' % i) as scope:
                     # generate data
-                    images, cams, depth_image, colmap_img, prob_im = training_iterator.get_next() # add prob_im
+
+                    images, cams, depth_image, colmap_img, prob_im = training_iterator.get_next() 
+
                     images.set_shape(tf.TensorShape([None, FLAGS.view_num, None, None, 3])) 
                     cams.set_shape(tf.TensorShape([None, FLAGS.view_num, 2, 4, 4]))
                     depth_image.set_shape(tf.TensorShape([None, None, None, 1]))
@@ -285,13 +293,17 @@ def train(traning_list):
                             resized_colmap_image = tf.image.resize_nearest_neighbor(colmap_img, [depth_shape[1], depth_shape[2]])
                             resized_prob_image = tf.image.resize_nearest_neighbor(prob_im, [depth_shape[1], depth_shape[2]])
 
-                            tmp = depth_image
-                            tmp_prob = 0.75 * tf.ones(tf.shape(depth_image))
+                            # tmp = depth_image
 
-                            depth_map, prob_map = inference_with_init(
-                                images, cams, FLAGS.max_d, depth_start, depth_interval,tmp,tmp_prob, is_master_gpu)
+                            # depth_end = depth_start + (tf.cast(FLAGS.max_d, tf.float32) - 1) * depth_interval
+                            # tmp = tf.minimum(depth_image, tf.cast(depth_end, tf.float32))
+                            # tmp = tf.maximum(tmp, depth_start)
+                            # tmp_prob = 0.75 * tf.ones(tf.shape(depth_image))
+
                             # depth_map, prob_map = inference_with_init(
-                            #     images, cams, FLAGS.max_d, depth_start, depth_interval,resized_colmap_image,resized_prob_image, is_master_gpu)
+                            #     images, cams, FLAGS.max_d, depth_start, depth_interval,tmp,tmp_prob, is_master_gpu)
+                            depth_map, prob_map = inference_with_init(
+                                images, cams, FLAGS.max_d, depth_start, depth_interval,resized_colmap_image,resized_prob_image, is_master_gpu)
                         else:
                             depth_map, prob_map = inference(
                                 images, cams, FLAGS.max_d, depth_start, depth_interval, is_master_gpu)
@@ -342,8 +354,8 @@ def train(traning_list):
                     # depth_map = tf.Print(depth_map, [tf.reduce_mean(resized_colmap_image), tf.reduce_min(resized_colmap_image), tf.reduce_max(resized_colmap_image)], "diffGT_COLMAP ",summarize=5)
                     # depth_image = tf.Print(depth_map, [tf.shape(depth_image), tf.reduce_min(depth_image), tf.reduce_max(depth_image)], "depth_image ",summarize=5)
         
-                    summaries.append(tf.summary.image("depth_map", depth_map))
-                    summaries.append(tf.summary.image("GT", depth_image))
+                    # summaries.append(tf.summary.image("depth_map", depth_map))
+                    # summaries.append(tf.summary.image("GT", depth_image))
 
                     # if FLAGS.use_colmap:
                         # summaries.append(tf.summary.image("COLMAP", colmap_img))

@@ -68,21 +68,24 @@ def get_homographies_initialized(left_cam, right_cam, depth_num, depth_start, de
         h = tf.shape(init_depth)[1]
         w = tf.shape(init_depth)[2]
 
-        tf.ones_like(init_depth)
-
         min_depth = depth_start
         max_depth = depth_start + tf.cast(depth_num, tf.float32)  * depth_interval
-        min_depth_corrected = min_depth + (init_depth - min_depth) * prob_depth # h x w
-        max_depth_corrected = max_depth - (max_depth - init_depth) * prob_depth # h x w
+        L = (max_depth - min_depth) * (1.5 - prob_depth)
+        
+        min_depth_corrected = tf.maximum (min_depth, init_depth - L) # h x w
+        max_depth_corrected = tf.minimum (max_depth, init_depth + L) # h x w
+
+        depths_start = tf.tile(min_depth_corrected,[1,1,1,depth_num])
+
 
         depthInt = tf.tile(tf.expand_dims(tf.expand_dims(tf.cast(tf.range(depth_num), tf.float32), axis=0), axis=0),[h,w,1])
         depth_intervals = (max_depth_corrected - min_depth_corrected) / tf.cast(depth_num,tf.float32)
         # depth_intervals = tf.Print(depth_intervals,[tf.shape(depth_intervals)], "depth_intervals ",summarize=259)
 
-        depth_intervalN = tf.cast(depth_interval, tf.float32)  *tf.ones_like(min_depth_corrected)
-        # depth_intervalN = tf.Print(depth_intervalN,[tf.shape(depth_intervalN)], "depth_intervalN ",summarize=259)
-        depth2 = depth_start + depthInt * depth_intervalN
-        # depth2 = tf.Print(depth2,[tf.shape(depth2)], "depth2 ",summarize=259)
+        depth_intervalN = tf.cast(depth_interval, tf.float32) * tf.ones_like(min_depth_corrected)
+
+        depth2 = depths_start + depthInt * depth_intervals
+        # depth2 = tf.Print(depth2,[tf.shape(min_depth_corrected),tf.shape(depthInt),tf.shape(depth_intervals)], "min_depth_corrected ",summarize=259)
         
         # preparation
         num_depth = tf.shape(depth2)[3]
